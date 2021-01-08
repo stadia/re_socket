@@ -8,7 +8,7 @@ import (
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
-	socket := re_socket.ReSocket{
+	socket := resc.ReSocket{
 	}
 	socket.Dial("wss://echo.websocket.org")
 

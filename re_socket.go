@@ -1,5 +1,5 @@
 // that will automatically reconnect if the connection is dropped.
-package re_socket
+package resc
 
 import (
 	"errors"
@@ -29,6 +29,10 @@ type ReSocket struct {
 	RecIntvlFactor float64
 	// NonVerbose suppress connecting/reconnecting messages.
 	NonVerbose bool
+	// KeepAliveTimeout is an interval for sending ping/pong messages
+	// disabled if 0
+	KeepAliveTimeout time.Duration
+	DialTimeOut time.Duration
 
 	isConnected bool
 	mu          sync.RWMutex
@@ -119,16 +123,28 @@ func (rc *ReSocket) setDefaultRecIntvlFactor() {
 	}
 }
 
+func (rc *ReSocket) setDefaultDialTimeOut() {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	if rc.DialTimeOut == 0 {
+		rc.DialTimeOut = 15 * time.Second
+	}
+}
+
 // Dial creates a new client connection.
 func (rc *ReSocket) Dial(ipAddress string) {
 	// Close channel
 	rc.close = make(chan bool, 1)
+	// Connected channel
+	rc.connected = make(chan struct{})
 	
 	// Config
 	rc.setIPAddress(ipAddress)
 	rc.setDefaultRecIntvlMin()
 	rc.setDefaultRecIntvlMax()
 	rc.setDefaultRecIntvlFactor()
+	rc.setDefaultDialTimeOut()
 
 	// Connect
 	go rc.connect()
@@ -169,13 +185,16 @@ func (rc *ReSocket) getBackoff() *backoff.Backoff {
 	}
 }
 
+func (rc *ReSocket) getKeepAliveTimeout() time.Duration {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	return rc.KeepAliveTimeout
+}
+
 func (rc *ReSocket) connect() {
 	b := rc.getBackoff()
 	rand.Seed(time.Now().UTC().UnixNano())
-
-	if rc.connected == nil {
-		rc.connected = make(chan struct{})
-	}
 
 	for {
 		select {
@@ -183,7 +202,7 @@ func (rc *ReSocket) connect() {
 			return
 		default:
 			nextItvl := b.Duration()
-			conn, err := net.DialTimeout("tcp", rc.ipAddress, time.Second * 10)
+			conn, err := net.DialTimeout("tcp", rc.ipAddress, rc.DialTimeOut)
 
 			rc.mu.Lock()
 			rc.conn = conn
@@ -195,6 +214,10 @@ func (rc *ReSocket) connect() {
 				conn.(*net.TCPConn).SetKeepAlive(true)
 				if !rc.getNonVerbose() {
 					log.Printf("Dial: connection was successfully established with %s\n", rc.ipAddress)
+				}
+				if rc.getKeepAliveTimeout() != 0 {
+					rc.conn.(*net.TCPConn).SetKeepAlive(true)
+					rc.conn.(*net.TCPConn).SetKeepAlivePeriod(rc.getKeepAliveTimeout())
 				}
 				rc.connected <- struct {
 				}{}
@@ -236,6 +259,17 @@ func (rc *ReSocket) Connected() <-chan struct{} {
 	if rc.connected == nil {
 		rc.connected = make(chan struct{})
 	}
-	d := rc.connected
-	return d
+
+	return rc.connected
+}
+
+func (rc *ReSocket) Closed() <-chan bool {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	if rc.close == nil {
+		rc.close = make(chan bool)
+	}
+
+	return rc.close
 }
