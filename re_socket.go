@@ -59,17 +59,17 @@ func (rc *ReSocket) setIsConnected(state bool) {
 	rc.isConnected = state
 }
 
-func (rc *ReSocket) getConn() *net.Conn {
+func (rc *ReSocket) GetConn() net.Conn {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 
-	return &rc.conn
+	return rc.conn
 }
 
 // Close closes the underlying network connection without
 // sending or waiting for a close frame.
 func (rc *ReSocket) Close() {
-	if rc.getConn() != nil {
+	if rc.GetConn() != nil {
 		rc.mu.Lock()
 		rc.conn.Close()
 		rc.mu.Unlock()
