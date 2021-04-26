@@ -27,27 +27,27 @@ type ReSocket struct {
 	// RecIntvlFactor specifies the rate of increase of the reconnection
 	// interval, default to 1.5
 	RecIntvlFactor float64
-	// NonVerbose suppress connecting/reconnecting messages.
-	NonVerbose bool
+	// DialTimeOut specifies the duration for the dial to complete,
+	// default to 2 seconds
+	DialTimeOut time.Duration
 	// KeepAliveTimeout is an interval for sending ping/pong messages
 	// disabled if 0
 	KeepAliveTimeout time.Duration
-	DialTimeOut time.Duration
+	// NonVerbose suppress connecting/reconnecting messages.
+	NonVerbose bool
 
 	isConnected bool
 	mu          sync.RWMutex
 	ipAddress	string
 	dialErr     error
-	close       chan (bool)
+	dialer *net.Dialer
 
 	conn net.Conn
-	connected chan (struct{})
 }
 
 // CloseAndReconnect will try to reconnect.
 func (rc *ReSocket) CloseAndReconnect() {
 	rc.Close()
-	<-rc.close
 	go rc.connect()
 }
 
@@ -59,15 +59,22 @@ func (rc *ReSocket) setIsConnected(state bool) {
 	rc.isConnected = state
 }
 
+func (rc *ReSocket) getConn() *net.Conn {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	return &rc.conn
+}
+
 // Close closes the underlying network connection without
 // sending or waiting for a close frame.
 func (rc *ReSocket) Close() {
-	if rc.conn != nil {
+	if rc.getConn() != nil {
 		rc.mu.Lock()
 		rc.conn.Close()
 		rc.mu.Unlock()
 	}
-	rc.close <- true
+
 	rc.setIsConnected(false)
 }
 
@@ -132,22 +139,37 @@ func (rc *ReSocket) setDefaultDialTimeOut() {
 	}
 }
 
+func (rc *ReSocket) setDefaultDialer(dialTimeout time.Duration) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	rc.dialer = &net.Dialer{
+		Timeout: dialTimeout,
+	}
+}
+
+func (rc *ReSocket) getDialTimeout() time.Duration {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	return rc.DialTimeOut
+}
+
 // Dial creates a new client connection.
 func (rc *ReSocket) Dial(ipAddress string) {
-	// Close channel
-	rc.close = make(chan bool, 1)
-	// Connected channel
-	rc.connected = make(chan struct{})
-	
 	// Config
 	rc.setIPAddress(ipAddress)
 	rc.setDefaultRecIntvlMin()
 	rc.setDefaultRecIntvlMax()
 	rc.setDefaultRecIntvlFactor()
 	rc.setDefaultDialTimeOut()
+	rc.setDefaultDialer(rc.getDialTimeout())
 
 	// Connect
 	go rc.connect()
+
+	// wait on first attempt
+	time.Sleep(rc.getDialTimeout())
 }
 
 // GetIPAddress returns current connection IPAddress
@@ -156,14 +178,6 @@ func (rc *ReSocket) GetIPAddress() string {
 	defer rc.mu.RUnlock()
 
 	return rc.ipAddress
-}
-
-// GetConn returns current connection connection
-func (rc *ReSocket) GetConn() net.Conn {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-
-	return rc.conn
 }
 
 func (rc *ReSocket) getNonVerbose() bool {
@@ -197,41 +211,34 @@ func (rc *ReSocket) connect() {
 	rand.Seed(time.Now().UTC().UnixNano())
 
 	for {
-		select {
-		case <-rc.close:
-			return
-		default:
-			nextItvl := b.Duration()
-			conn, err := net.DialTimeout("tcp", rc.ipAddress, rc.DialTimeOut)
+		nextItvl := b.Duration()
+		conn, err := rc.dialer.Dial("tcp", rc.ipAddress)
 
-			rc.mu.Lock()
-			rc.conn = conn
-			rc.dialErr = err
-			rc.isConnected = err == nil
-			rc.mu.Unlock()
+		rc.mu.Lock()
+		rc.conn = conn
+		rc.dialErr = err
+		rc.isConnected = err == nil
+		rc.mu.Unlock()
 
-			if err == nil {
-				conn.(*net.TCPConn).SetKeepAlive(true)
-				if !rc.getNonVerbose() {
-					log.Printf("Dial: connection was successfully established with %s\n", rc.ipAddress)
-				}
-				if rc.getKeepAliveTimeout() != 0 {
-					rc.conn.(*net.TCPConn).SetKeepAlive(true)
-					rc.conn.(*net.TCPConn).SetKeepAlivePeriod(rc.getKeepAliveTimeout())
-				}
-				rc.connected <- struct {
-				}{}
-
-				return
-			}
-
+		if err == nil {
 			if !rc.getNonVerbose() {
-				log.Println(err)
-				log.Println("Dial: will try again in", nextItvl, "seconds.")
+				log.Printf("Dial: connection was successfully established with %s\n", rc.ipAddress)
 			}
 
-			time.Sleep(nextItvl)
+			if rc.getKeepAliveTimeout() != 0 {
+				rc.conn.(*net.TCPConn).SetKeepAlive(true)
+				rc.conn.(*net.TCPConn).SetKeepAlivePeriod(rc.getKeepAliveTimeout())
+			}
+
+			return
 		}
+
+		if !rc.getNonVerbose() {
+			log.Println(err)
+			log.Println("Dial: will try again in", nextItvl, "seconds.")
+		}
+
+		time.Sleep(nextItvl)
 	}
 }
 
@@ -250,26 +257,4 @@ func (rc *ReSocket) IsConnected() bool {
 	defer rc.mu.RUnlock()
 
 	return rc.isConnected
-}
-
-func (rc *ReSocket) Connected() <-chan struct{} {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-
-	if rc.connected == nil {
-		rc.connected = make(chan struct{})
-	}
-
-	return rc.connected
-}
-
-func (rc *ReSocket) Closed() <-chan bool {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-
-	if rc.close == nil {
-		rc.close = make(chan bool)
-	}
-
-	return rc.close
 }
