@@ -28,7 +28,7 @@ type ReSocket struct {
 	// interval, default to 1.5
 	RecIntvlFactor float64
 	// DialTimeOut specifies the duration for the dial to complete,
-	// default to 2 seconds
+	// default to 10 seconds
 	DialTimeOut time.Duration
 	// KeepAliveTimeout is an interval for sending ping/pong messages
 	// disabled if 0
@@ -135,7 +135,7 @@ func (rc *ReSocket) setDefaultDialTimeOut() {
 	defer rc.mu.Unlock()
 
 	if rc.DialTimeOut == 0 {
-		rc.DialTimeOut = 15 * time.Second
+		rc.DialTimeOut = 10 * time.Second
 	}
 }
 
