@@ -40,7 +40,6 @@ type ReSocket struct {
 	mu          sync.RWMutex
 	ipAddress   string
 	dialErr     error
-	dialer      *net.Dialer
 
 	conn net.Conn
 }
@@ -139,15 +138,6 @@ func (rc *ReSocket) setDefaultDialTimeOut() {
 	}
 }
 
-func (rc *ReSocket) setDefaultDialer(dialTimeout time.Duration) {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-
-	rc.dialer = &net.Dialer{
-		Timeout: dialTimeout,
-	}
-}
-
 func (rc *ReSocket) getDialTimeout() time.Duration {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
@@ -163,7 +153,6 @@ func (rc *ReSocket) Dial(ipAddress string) {
 	rc.setDefaultRecIntvlMax()
 	rc.setDefaultRecIntvlFactor()
 	rc.setDefaultDialTimeOut()
-	rc.setDefaultDialer(rc.getDialTimeout())
 
 	// Connect
 	go rc.connect()
@@ -212,7 +201,7 @@ func (rc *ReSocket) connect() {
 
 	for {
 		nextItvl := b.Duration()
-		conn, err := rc.dialer.Dial("tcp", rc.ipAddress)
+		conn, err := net.DialTimeout("tcp", rc.ipAddress, rc.DialTimeOut)
 
 		rc.mu.Lock()
 		rc.conn = conn
@@ -230,6 +219,11 @@ func (rc *ReSocket) connect() {
 				rc.conn.(*net.TCPConn).SetKeepAlivePeriod(rc.getKeepAliveTimeout())
 			}
 
+			return
+		}
+
+		if nErr, ok := err.(net.Error); ok && !(nErr.Timeout() || nErr.Temporary()) {
+			log.Println(err)
 			return
 		}
 
