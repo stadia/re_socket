@@ -38,9 +38,9 @@ type ReSocket struct {
 
 	isConnected bool
 	mu          sync.RWMutex
-	ipAddress	string
+	ipAddress   string
 	dialErr     error
-	dialer *net.Dialer
+	dialer      *net.Dialer
 
 	conn net.Conn
 }
